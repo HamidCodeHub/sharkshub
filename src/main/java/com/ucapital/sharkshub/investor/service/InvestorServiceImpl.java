@@ -3,24 +3,29 @@ package com.ucapital.sharkshub.investor.service;
 import com.ucapital.sharkshub.investor.dto.*;
 import com.ucapital.sharkshub.investor.exception.InvestorValidationException;
 import com.ucapital.sharkshub.investor.model.Investor;
+import com.ucapital.sharkshub.investor.model.ProcessedFileRecord;
 import com.ucapital.sharkshub.investor.repository.InvestorRepository;
+import com.ucapital.sharkshub.investor.repository.ProcessedFileRecordRepository;
 import com.ucapital.sharkshub.investor.util.BulkInsertUtil;
 import com.ucapital.sharkshub.investor.util.FileParser;
 import com.ucapital.sharkshub.investor.validation.InvestorValidator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.batch.core.*;
+import org.springframework.batch.core.explore.JobExplorer;
+import org.springframework.batch.core.launch.JobLauncher;
+import org.springframework.batch.core.repository.JobExecutionAlreadyRunningException;
+import org.springframework.batch.core.repository.JobInstanceAlreadyCompleteException;
+import org.springframework.batch.core.repository.JobRestartException;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Optional;
-import java.util.Set;
+import java.util.*;
 import java.util.stream.Collectors;
 
 
@@ -33,17 +38,32 @@ public class InvestorServiceImpl implements InvestorService {
     private final InvestorValidator investorValidator;
     private final FileParser fileParser;
     private final BulkInsertUtil bulkInsertUtil;
+    private final ProcessedFileRecordRepository processedFileRepo;
+    private final FileStorageService fileStorageService;
+    private final JobLauncher jobLauncher;
+    private final Job investorBulkJob;
+    private final JobExplorer jobExplorer;
 
     @Autowired
     public InvestorServiceImpl(
+            JobLauncher jobLauncher,
             InvestorRepository investorRepository,
             InvestorValidator investorValidator,
             FileParser fileParser,
-            BulkInsertUtil bulkInsertUtil) {
+            BulkInsertUtil bulkInsertUtil,
+            ProcessedFileRecordRepository processedFileRecordRepository,
+            FileStorageService fileStorageService,
+            @Qualifier("investorBulkJob") Job investorBulkJob,
+            JobExplorer jobExplorer) {
         this.investorRepository = investorRepository;
         this.investorValidator = investorValidator;
         this.fileParser = fileParser;
         this.bulkInsertUtil = bulkInsertUtil;
+        this.processedFileRepo= processedFileRecordRepository;
+        this.fileStorageService = fileStorageService;
+        this.jobLauncher = jobLauncher;
+        this.investorBulkJob = investorBulkJob;
+        this.jobExplorer = jobExplorer;
     }
 
 
@@ -132,7 +152,7 @@ public class InvestorServiceImpl implements InvestorService {
     }
 
 
-    @Transactional
+    //@Transactional
     @Override
     public BulkOperationResponse bulkInsertFromFile(MultipartFile file) throws IOException {
         logger.info("Starting bulk insert from file: {}", file.getOriginalFilename());
@@ -171,6 +191,68 @@ public class InvestorServiceImpl implements InvestorService {
             response.addError(0, file.getOriginalFilename(), "FILE_PROCESSING_ERROR", e.getMessage());
             return response;
         }
+    }
+
+    @Override
+    public long launchBulkInsertJob(MultipartFile file) throws IOException {
+
+        String storedPath = fileStorageService.saveToTemp(file);
+        String checksum   = fileStorageService.checksum(storedPath);
+
+        processedFileRepo.findById(checksum)
+                .ifPresent(rec -> { throw new RuntimeException("Duplicated value : "+rec.getJobExecutionId() ); });
+
+
+        JobParameters params = new JobParametersBuilder()
+                .addString("filePath", storedPath)
+                .addString("checksum", checksum)
+                .addDate("timestamp", new Date())
+                .toJobParameters();
+
+
+        JobExecution exec = null;
+        try {
+            exec = jobLauncher.run(investorBulkJob, params);
+        } catch (JobExecutionAlreadyRunningException e) {
+            logger.warn("Tried to launch job but it’s already running", e);
+            throw new RuntimeException("An import for this file is already in progress",e);
+        } catch (JobRestartException e) {
+            logger.error("Unable to restart batch job", e);
+            throw new RuntimeException("Cannot restart the import job", e);
+        } catch (JobInstanceAlreadyCompleteException e) {
+            logger.info("Tried to re-run a completed job", e);
+            throw new RuntimeException("This file has already been imported successfully",e);
+        } catch (JobParametersInvalidException e) {
+            logger.error("Invalid parameters for batch job", e);
+            throw new RuntimeException("Invalid import parameters: " + e.getMessage(), e);
+        }
+
+
+        processedFileRepo.save(new ProcessedFileRecord(checksum, exec.getId()));
+
+        return exec.getId();
+    }
+
+    @Override
+    public BulkOperationResponse getBulkJobStatus(long jobExecutionId) {
+        JobExecution exec = jobExplorer.getJobExecution(jobExecutionId);
+        BulkOperationResponse resp = new BulkOperationResponse();
+
+        long readCount  = exec.getStepExecutions().stream().mapToLong(StepExecution::getReadCount).sum();
+        long writeCount = exec.getStepExecutions().stream().mapToLong(StepExecution::getWriteCount).sum();
+        long skipCount  = exec.getStepExecutions().stream().mapToLong(StepExecution::getSkipCount).sum();
+
+        resp.setTotalProcessed((int) readCount);
+        resp.setSuccessCount((int) writeCount);
+        resp.setFailureCount((int) skipCount);
+        resp.setStatus(exec.isRunning()
+                ? OperationStatus.IN_PROGRESS
+                : exec.getStatus().isUnsuccessful()
+                ? OperationStatus.FAILED
+                : OperationStatus.COMPLETED);
+        resp.setMessage("Job status: " + exec.getStatus().name());
+
+        return resp;
     }
 
 

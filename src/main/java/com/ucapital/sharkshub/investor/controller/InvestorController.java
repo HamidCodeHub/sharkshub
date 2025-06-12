@@ -96,6 +96,56 @@ public class InvestorController {
         }
     }
 
+    @PostMapping(value = "/bulk/file/async", consumes = "multipart/form-data")
+    @Operation(summary = "Launch async bulk insert job",
+            description = "Starts a batch job to import investors from CSV or JSON, returns a jobExecutionId you can poll for status")
+    @ApiResponses({
+            @ApiResponse(responseCode = "202", description = "Job launched successfully",
+                    content = @Content(schema = @Schema(type = "integer", example = "12345"))),
+            @ApiResponse(responseCode = "400", description = "Invalid file or format"),
+            @ApiResponse(responseCode = "500", description = "Server error during job launch")
+    })
+    public ResponseEntity<Long> launchBulkInsertJob(
+            @RequestPart("file") MultipartFile file) {
+        logger.info("Received async bulk insert request from file: {}", file.getOriginalFilename());
+        try {
+            long jobExecutionId = investorService.launchBulkInsertJob(file);
+            return ResponseEntity.accepted().body(jobExecutionId);
+        } catch (IOException e) {
+            logger.error("Error reading file: {}", e.getMessage(), e);
+            return ResponseEntity
+                    .status(HttpStatus.BAD_REQUEST)
+                    .body(null);
+        } catch (Exception e) {
+            logger.error("Error launching job: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(null);
+        }
+    }
+
+    @GetMapping("/bulk/file/status/{jobExecutionId}")
+    @Operation(summary = "Get status of an async bulk insert job",
+            description = "Poll for the current status and any validation errors/warnings of a previously-launched job")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Current job status",
+                    content = @Content(schema = @Schema(implementation = BulkOperationResponse.class))),
+            @ApiResponse(responseCode = "404", description = "Job not found"),
+            @ApiResponse(responseCode = "500", description = "Server error retrieving status")
+    })
+    public ResponseEntity<BulkOperationResponse> getBulkJobStatus(
+            @PathVariable("jobExecutionId") long jobExecutionId) {
+        logger.info("Fetching status for bulk insert job {}", jobExecutionId);
+        try {
+            BulkOperationResponse status = investorService.getBulkJobStatus(jobExecutionId);
+            if (status == null) {
+                return ResponseEntity.notFound().build();
+            }
+            return ResponseEntity.ok(status);
+        } catch (Exception e) {
+            logger.error("Error fetching job status {}: {}", jobExecutionId, e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
+
 
     @GetMapping
     @Operation(summary = "Get all investors",

@@ -3,13 +3,11 @@ package com.ucapital.sharkshub;
 import com.ucapital.sharkshub.investor.repository.InvestorRepository;
 import com.ucapital.sharkshub.investor.service.InvestorService;
 import com.ucapital.sharkshub.investor.dto.InvestorDto;
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.TestInstance;
+import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.util.CollectionUtils;
 
 import java.io.ByteArrayInputStream;
@@ -22,7 +20,10 @@ import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-@SpringBootTest
+@SpringBootTest(
+        properties = "spring.batch.job.repository-type=map"
+)
+@ActiveProfiles("test")
 class InvestorServicePerformanceTest {
 
     @Autowired
@@ -62,6 +63,11 @@ class InvestorServicePerformanceTest {
     void cleanDbAndWarmUp() {
         investorRepository.deleteAll();
         investorService.bulkInsert(largeDtoList.subList(0, 100));
+    }
+
+    @AfterAll
+    void cleanDb() {
+        investorRepository.deleteAll();
     }
 
     @Test

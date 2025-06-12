@@ -17,6 +17,10 @@ public interface InvestorService {
     @Transactional
     BulkOperationResponse bulkInsertFromFile(MultipartFile file) throws IOException;
 
+    public BulkOperationResponse getBulkJobStatus(long jobExecutionId);
+
+    public long launchBulkInsertJob(MultipartFile file) throws IOException;
+
     Optional<InvestorDto> findById(String id);
 
     Optional<InvestorDto> findByName(String name);
@@ -26,4 +30,6 @@ public interface InvestorService {
     Investor convertToEntity(InvestorDto dto);
 
     InvestorDto convertToDto(Investor entity);
+
+
 }
