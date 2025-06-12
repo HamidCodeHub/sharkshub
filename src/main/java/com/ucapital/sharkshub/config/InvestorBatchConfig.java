@@ -1,6 +1,8 @@
 package com.ucapital.sharkshub.config;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ucapital.sharkshub.investor.dto.*;
+import com.ucapital.sharkshub.investor.util.JsonArrayItemReader;
 import org.springframework.batch.item.data.MongoItemWriter;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Bean;
@@ -23,8 +25,6 @@ import org.springframework.batch.item.ItemWriter;
 import org.springframework.batch.item.file.FlatFileItemReader;
 import org.springframework.batch.item.file.mapping.DefaultLineMapper;
 import org.springframework.batch.item.file.transform.DelimitedLineTokenizer;
-import org.springframework.batch.item.json.JsonItemReader;
-import org.springframework.batch.item.json.builder.JsonItemReaderBuilder;
 import org.springframework.batch.item.data.builder.MongoItemWriterBuilder;
 
 import org.springframework.beans.factory.annotation.Value;
@@ -35,9 +35,6 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
-
-import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.batch.item.json.JacksonJsonObjectReader;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -60,13 +57,13 @@ public class InvestorBatchConfig {
     @Bean
     public Step investorBulkStep(JobRepository jobRepository,
                                  PlatformTransactionManager txManager,
-                                 ItemReader<InvestorDto> reader,
+                                 ItemReader<InvestorDto> fileItemReader,
                                  ItemProcessor<InvestorDto, InvestorDto> processor,
                                  ItemWriter<InvestorDto> writer,
                                  TaskExecutor taskExecutor) {
         return new StepBuilder("investorBulkStep", jobRepository)
                 .<InvestorDto, InvestorDto>chunk(100, txManager)
-                .reader(reader)
+                .reader(fileItemReader)
                 .processor(processor)
                 .writer(writer)
                 .faultTolerant()
@@ -78,27 +75,18 @@ public class InvestorBatchConfig {
 
     @Bean
     @StepScope
-    public ItemReader<InvestorDto> reader(
-            @Value("#{jobParameters['filePath']}") String filePath,
-            FlatFileItemReader<InvestorDto> csvReader,
-            JsonItemReader<InvestorDto> jsonReader
-    ) {
-        if (filePath.toLowerCase().endsWith(".json")) {
-            return jsonReader;
+    public ItemReader<InvestorDto> fileItemReader(@Value("#{jobParameters['filePath']}") String filePath) {
+        if (filePath != null && filePath.toLowerCase().endsWith(".json")) {
+            return createJsonReader(filePath);
         } else {
-            return csvReader;
+            return createCsvReader(filePath);
         }
     }
 
-    @Bean
-    @StepScope
-    public FlatFileItemReader<InvestorDto> csvReader(
-            @Value("#{jobParameters['filePath']}") String filePath
-    ) {
+    private FlatFileItemReader<InvestorDto> createCsvReader(String filePath) {
         FlatFileItemReader<InvestorDto> reader = new FlatFileItemReader<>();
         reader.setResource(new FileSystemResource(filePath));
         reader.setLinesToSkip(1);
-
 
         DelimitedLineTokenizer tokenizer = new DelimitedLineTokenizer();
         tokenizer.setDelimiter(DelimitedLineTokenizer.DELIMITER_COMMA);
@@ -113,16 +101,15 @@ public class InvestorBatchConfig {
                 "contact_mobile","contact_fax","contact_role","contact_orderNum"
         });
         tokenizer.setStrict(false);
+
         DefaultLineMapper<InvestorDto> lineMapper = new DefaultLineMapper<>();
         lineMapper.setLineTokenizer(tokenizer);
         lineMapper.setFieldSetMapper(fieldSet -> {
-
             List<String> geoAreas = splitToList(fieldSet.readString("preferredGeographicalAreas"));
             List<String> invTypes = splitToList(fieldSet.readString("preferredInvestmentTypes"));
             List<String> sectors   = splitToList(fieldSet.readString("sectors"));
             List<String> verticals = splitToList(fieldSet.readString("verticals"));
             List<String> macroAreas= splitToList(fieldSet.readString("macroAreas"));
-
 
             AddressDto address = AddressDto.builder()
                     .address(fieldSet.readString("hqAddress"))
@@ -135,7 +122,6 @@ public class InvestorBatchConfig {
                     .fax(fieldSet.readString("hqFax"))
                     .sn(fieldSet.readString("hqSn"))
                     .build();
-
 
             FinancialsDto fin = FinancialsDto.builder()
                     .invMin(fieldSet.readBigDecimal("invMin"))
@@ -151,7 +137,6 @@ public class InvestorBatchConfig {
                     .ebitMax(fieldSet.readBigDecimal("ebitMax"))
                     .build();
 
-
             InvDescriptionsDto desc = InvDescriptionsDto.builder()
                     .it(fieldSet.readString("desc_it"))
                     .en(fieldSet.readString("desc_en"))
@@ -161,7 +146,6 @@ public class InvestorBatchConfig {
                     .ru(fieldSet.readString("desc_ru"))
                     .ch(fieldSet.readString("desc_ch"))
                     .build();
-
 
             ContactsDto contact = ContactsDto.builder()
                     .firstName(fieldSet.readString("contact_firstName"))
@@ -173,7 +157,6 @@ public class InvestorBatchConfig {
                     .role(fieldSet.readString("contact_role"))
                     .orderNum(fieldSet.readInt("contact_orderNum"))
                     .build();
-
 
             return InvestorDto.builder()
                     .name(fieldSet.readString("name"))
@@ -203,6 +186,12 @@ public class InvestorBatchConfig {
         return reader;
     }
 
+    private JsonArrayItemReader createJsonReader(String filePath) {
+        ObjectMapper objectMapper = new ObjectMapper();
+        JsonArrayItemReader reader = new JsonArrayItemReader(objectMapper);
+        reader.setResource(new FileSystemResource(filePath));
+        return reader;
+    }
 
     private List<String> splitToList(String raw) {
         if (raw == null || raw.isBlank()) {
@@ -215,23 +204,14 @@ public class InvestorBatchConfig {
     }
 
     @Bean
-    @StepScope
-    public JsonItemReader<InvestorDto> jsonReader(
-            @Value("#{jobParameters['filePath']}") String filePath
-    ) {
-        return new JsonItemReaderBuilder<InvestorDto>()
-                .name("investorJsonReader")
-                .resource(new FileSystemResource(filePath))
-                .jsonObjectReader(
-                        new JacksonJsonObjectReader<>(new ObjectMapper(), InvestorDto.class))
-                .build();
-    }
-
-    @Bean
     public ItemProcessor<InvestorDto, InvestorDto> processor() {
         return dto -> {
-            // your validation logic…
-            return dto;
+            // Add any validation or transformation logic here
+            if (dto != null && dto.getName() != null && !dto.getName().trim().isEmpty()) {
+                return dto;
+            }
+            // Return null to skip invalid items
+            return null;
         };
     }
 
