@@ -19,6 +19,8 @@ import org.springframework.batch.core.repository.JobInstanceAlreadyCompleteExcep
 import org.springframework.batch.core.repository.JobRestartException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -275,6 +277,24 @@ public class InvestorServiceImpl implements InvestorService {
         return investorRepository.findAll().stream()
                 .map(this::convertToDto)
                 .collect(Collectors.toList());
+    }
+
+    @Override
+    public List<InvestorDto> findAll(int offset, int limit) {
+
+        Page<Investor> page = investorRepository.findAll(PageRequest.of(offset, limit));
+        return page
+                .stream()
+                .map(this::convertToDto)
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public void deleteById(String id) {
+        if (!investorRepository.existsById(id)) {
+            throw new RuntimeException("Investor not found with id " + id);
+        }
+        investorRepository.deleteById(id);
     }
 
 

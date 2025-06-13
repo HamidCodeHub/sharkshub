@@ -148,15 +148,23 @@ public class InvestorController {
 
 
     @GetMapping
-    @Operation(summary = "Get all investors",
-            description = "Retrieve all investors from the database")
+    @Operation(
+            summary = "Get all investors",
+            description = "Retrieve a paginated list of investors from the database"
+    )
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Investors retrieved successfully"),
             @ApiResponse(responseCode = "500", description = "Server error")
     })
-    public ResponseEntity<List<InvestorDto>> getAllInvestors() {
-        logger.debug("Received request to get all investors");
-        List<InvestorDto> investors = investorService.findAll();
+    public ResponseEntity<List<InvestorDto>> getAllInvestors(
+            @RequestParam(name = "offset", defaultValue = "0")
+            @Parameter(description = "Zero-based page index (0..N)") int offset,
+
+            @RequestParam(name = "limit", defaultValue = "10")
+            @Parameter(description = "Number of records per page") int limit
+    ) {
+        logger.debug("Received request to get all investors (offset={}, limit={})", offset, limit);
+        List<InvestorDto> investors = investorService.findAll(offset, limit);
         return ResponseEntity.ok(investors);
     }
 
@@ -198,6 +206,25 @@ public class InvestorController {
         return investor
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
+    }
+
+    @DeleteMapping("/{id}")
+    @Operation(
+            summary = "Delete an investor",
+            description = "Remove the investor with the given id from the database"
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "204", description = "Investor deleted successfully"),
+            @ApiResponse(responseCode = "404", description = "Investor not found"),
+            @ApiResponse(responseCode = "500", description = "Server error")
+    })
+    public ResponseEntity<Void> deleteInvestor(
+            @Parameter(description = "ID of the investor to delete")
+            @PathVariable String id
+    ) {
+        logger.debug("Received request to delete investor with id={}", id);
+        investorService.deleteById(id);
+        return ResponseEntity.noContent().build();
     }
 
 }

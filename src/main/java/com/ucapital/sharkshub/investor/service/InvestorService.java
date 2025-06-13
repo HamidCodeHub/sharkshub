@@ -27,9 +27,11 @@ public interface InvestorService {
 
     List<InvestorDto> findAll();
 
+    List<InvestorDto> findAll(int offset, int limit);
+
     Investor convertToEntity(InvestorDto dto);
 
     InvestorDto convertToDto(Investor entity);
-
+    void deleteById(String id);
 
 }

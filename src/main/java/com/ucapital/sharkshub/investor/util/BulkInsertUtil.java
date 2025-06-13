@@ -110,7 +110,7 @@ public class BulkInsertUtil {
 
         try {
             List<WriteModel<Document>> writeModels = new ArrayList<>();
-            List<Integer> indexMap = new ArrayList<>(); // Maps writeModels indices to original indices
+            List<Integer> indexMap = new ArrayList<>();
 
             for (int i = 0; i < batch.size(); i++) {
                 try {
