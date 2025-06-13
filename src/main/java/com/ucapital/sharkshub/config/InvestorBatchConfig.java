@@ -36,7 +36,12 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
+
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
 
 @Configuration
 public class InvestorBatchConfig {
@@ -53,7 +58,7 @@ public class InvestorBatchConfig {
     @Bean
     public Step investorBulkStep(JobRepository jobRepository,
                                  PlatformTransactionManager txManager,
-                                 ItemReader<InvestorDto> fileItemReader,
+                                 DelegatingFileItemReader fileItemReader,
                                  ItemProcessor<InvestorDto, InvestorDto> processor,
                                  ItemWriter<InvestorDto> writer) {
         return new StepBuilder("investorBulkStep", jobRepository)
@@ -67,20 +72,38 @@ public class InvestorBatchConfig {
                 .build();
     }
 
-    // Fixed: Delegating reader that handles lifecycle properly
+
     @Bean
     @StepScope
-    public ItemReader<InvestorDto> fileItemReader(@Value("#{jobParameters['filePath']}") String filePath) {
+    public DelegatingFileItemReader fileItemReader(@Value("#{jobParameters['filePath']}") String filePath) {
         return new DelegatingFileItemReader(filePath);
     }
 
     @Bean
-    public ItemProcessor<InvestorDto, InvestorDto> processor() {
+    public ItemProcessor<InvestorDto, InvestorDto> processor(MongoTemplate mongoTemplate) {
+        Set<String> seenInBatch = ConcurrentHashMap.newKeySet();
+
         return dto -> {
-            if (dto != null && dto.getName() != null && !dto.getName().trim().isEmpty()) {
-                return dto;
+            if (dto == null || dto.getName() == null || dto.getName().trim().isEmpty()) {
+                return null;
             }
-            return null;
+
+            String name = dto.getName().trim();
+
+            if (!seenInBatch.add(name)) {
+                System.out.println("=== Skipping duplicate in file: " + name + " ===");
+                return null;
+            }
+
+            Query query = new Query(Criteria.where("name").is(name));
+            boolean exists = mongoTemplate.exists(query, "investors");
+
+            if (exists) {
+                System.out.println("=== Skipping - already in database: " + name + " ===");
+                return null;
+            }
+
+            return dto;
         };
     }
 
@@ -103,13 +126,14 @@ public class InvestorBatchConfig {
         return exec;
     }
 
-    // Custom delegating reader with lazy initialization
+
     public static class DelegatingFileItemReader implements ItemReader<InvestorDto>, ItemStream {
         private final String filePath;
         private ItemReader<InvestorDto> delegate;
         private ItemStream streamDelegate;
         private boolean initialized = false;
-        private ExecutionContext executionContext;
+        private boolean opened = false;
+        private ExecutionContext savedExecutionContext;
 
         public DelegatingFileItemReader(String filePath) {
             this.filePath = filePath;
@@ -118,8 +142,10 @@ public class InvestorBatchConfig {
         @Override
         public void open(ExecutionContext executionContext) throws ItemStreamException {
             System.out.println("=== DelegatingFileItemReader.open() called for: " + filePath + " ===");
-            this.executionContext = executionContext;
-            initializeIfNeeded();
+            this.savedExecutionContext = executionContext;
+            this.opened = true;
+
+            initializeIfNeeded(executionContext);
         }
 
         @Override
@@ -135,40 +161,53 @@ public class InvestorBatchConfig {
             if (streamDelegate != null) {
                 streamDelegate.close();
             }
+            this.opened = false;
         }
 
         @Override
         public InvestorDto read() throws Exception {
-            initializeIfNeeded();
+
+            if (!initialized) {
+                System.out.println("=== WARNING: read() called before open() - initializing defensively ===");
+
+                if (isJsonFile()) {
+
+                    initializeIfNeeded(null);
+                } else {
+
+                    ExecutionContext defaultContext = new ExecutionContext();
+                    savedExecutionContext = defaultContext;
+                    initializeIfNeeded(defaultContext);
+                }
+            }
+
             return delegate.read();
         }
 
-        private void initializeIfNeeded() {
+        private void initializeIfNeeded(ExecutionContext context) {
             if (!initialized) {
                 System.out.println("=== Initializing reader for file: " + filePath + " ===");
 
-                if (filePath != null && filePath.toLowerCase().endsWith(".json")) {
+                if (isJsonFile()) {
                     // JSON Reader
                     System.out.println("=== Creating JSON reader ===");
                     ObjectMapper objectMapper = new ObjectMapper();
                     JsonArrayItemReader jsonReader = new JsonArrayItemReader(objectMapper);
                     jsonReader.setResource(new FileSystemResource(filePath));
                     delegate = jsonReader;
-                    streamDelegate = null; // JsonArrayItemReader doesn't implement ItemStream
-
-
+                    streamDelegate = null;
                 } else {
                     // CSV Reader
                     System.out.println("=== Creating CSV reader ===");
                     FlatFileItemReader<InvestorDto> csvReader = createCsvReader();
                     delegate = csvReader;
-                    streamDelegate = csvReader; // FlatFileItemReader implements ItemStream
+                    streamDelegate = csvReader;
 
-                    // Open the CSV reader if we have an execution context
-                    if (streamDelegate != null && executionContext != null) {
+
+                    if (streamDelegate != null && context != null) {
                         try {
-                            streamDelegate.open(executionContext);
-
+                            System.out.println("=== Opening CSV reader with execution context ===");
+                            streamDelegate.open(context);
                         } catch (Exception e) {
                             System.err.println("=== Error opening CSV reader: " + e.getMessage() + " ===");
                             throw new RuntimeException("Failed to open CSV reader", e);
@@ -179,6 +218,10 @@ public class InvestorBatchConfig {
                 initialized = true;
                 System.out.println("=== Reader initialization completed ===");
             }
+        }
+
+        private boolean isJsonFile() {
+            return filePath != null && filePath.toLowerCase().endsWith(".json");
         }
 
         private FlatFileItemReader<InvestorDto> createCsvReader() {
@@ -290,7 +333,7 @@ public class InvestorBatchConfig {
             return reader;
         }
 
-        // Helper methods for safe field reading
+
         private String readStringSafe(org.springframework.batch.item.file.transform.FieldSet fieldSet, String fieldName) {
             try {
                 String value = fieldSet.readString(fieldName);

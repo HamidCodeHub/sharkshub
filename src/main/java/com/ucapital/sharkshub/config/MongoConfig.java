@@ -5,13 +5,16 @@ import com.mongodb.ServerAddress;
 import com.mongodb.WriteConcern;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
+import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.config.AbstractMongoClientConfiguration;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.WriteResultChecking;
 import org.springframework.data.mongodb.core.convert.MappingMongoConverter;
+import org.springframework.data.mongodb.core.index.Index;
 import org.springframework.data.mongodb.repository.config.EnableMongoRepositories;
 
 import java.util.Collections;
@@ -30,6 +33,12 @@ public class MongoConfig extends AbstractMongoClientConfiguration {
 
     @Value("${spring.data.mongodb.database:sharkshub}")
     private String database;
+
+    @Value("${spring.data.mongodb.create-unique-index:true}")
+    private boolean createUniqueIndex;
+
+    // Add this field to store the template reference
+    private MongoTemplate mongoTemplateRef;
 
     @Override
     protected String getDatabaseName() {
@@ -55,15 +64,18 @@ public class MongoConfig extends AbstractMongoClientConfiguration {
         return MongoClients.create(settings);
     }
 
-    @Bean
-    public MongoTemplate mongoTemplate() {
-        MongoTemplate mongoTemplate = new MongoTemplate(mongoClient(), getDatabaseName());
+    @PostConstruct
+    public void initIndexes() {
+        if (createUniqueIndex && mongoTemplateRef != null) {
+            try {
+                mongoTemplateRef.indexOps("investors")
+                        .ensureIndex(new Index("name", Sort.Direction.ASC).unique());
 
-        mongoTemplate.setWriteResultChecking(WriteResultChecking.EXCEPTION);
-
-        MappingMongoConverter converter = (MappingMongoConverter) mongoTemplate.getConverter();
-        converter.setMapKeyDotReplacement("_DOT_");
-
-        return mongoTemplate;
+                System.out.println("=== Created unique index on 'name' field in investors collection ===");
+            } catch (Exception e) {
+                System.err.println("=== Warning: Could not create unique index: " + e.getMessage() + " ===");
+            }
+        }
     }
+
 }

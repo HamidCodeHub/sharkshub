@@ -45,7 +45,7 @@ public class JsonArrayItemReader implements ItemReader<InvestorDto> {
             return iterator.next();
         }
 
-        return null; // End of data
+        return null;
     }
 
     private void initialize() throws IOException {
@@ -56,7 +56,7 @@ public class JsonArrayItemReader implements ItemReader<InvestorDto> {
         logger.info("Initializing JsonArrayItemReader with resource: {}", resource.getFilename());
 
         try {
-            // Try to read as array first
+
             List<InvestorDto> investors = objectMapper.readValue(
                     resource.getInputStream(),
                     new TypeReference<List<InvestorDto>>() {}
@@ -66,7 +66,7 @@ public class JsonArrayItemReader implements ItemReader<InvestorDto> {
         } catch (Exception e) {
             logger.warn("Failed to parse as JSON array, trying single object: {}", e.getMessage());
             try {
-                // Reset the input stream and try single object
+
                 InvestorDto singleInvestor = objectMapper.readValue(
                         resource.getInputStream(),
                         InvestorDto.class
